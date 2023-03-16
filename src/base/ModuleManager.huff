@@ -1,0 +1,188 @@
+#include "./base/Executor.huff"
+#include "../common/SelfAuthorized.huff"
+#include "../utils/HashMap.huff"
+ 
+#define constant SENTINEL_MODULES = 0x0000000000000000000000000000000000000001
+
+// Storage slot 1 -> "mapping(address => address) modules"
+#define constant MODULES_SLOT = 0x0000000000000000000000000000000000000001
+
+/// Sets modules. Can only be called by the "setup" function. 
+#define macro SETUP_MODULES() = takes(0)  returns (0) {
+    //////// require(modules[SENTINEL_MODULES] == address(0))
+    [SENTINEL_MODULES]      // [sentinel_modules]
+    [MODULES_SLOT]          // [modules_slot, sentinel_modules]
+    GET()                   // [bool]
+    0x00 eq continue jumpi  // []
+    0x00 0x00 mstore 
+    0x00 0x00 revert
+    ////////
+
+    continue:
+        // modules[SENTINEL_MODULES] = SENTINEL_MODULES
+        [SENTINEL_MODULES]   // [sentinel_modules]
+        dup1                 // [sentinel_modules, sentinel_modules]
+        [MODULES_SLOT]       // [modules_slot, sentinel_modules, sentinel_modules]
+        SET()                // [] 
+
+        [SENTINEL_MODULES]  // [sentinel_modules]
+        [MODULES_SLOT]      // [modules_slot, sentinel_modules]
+        GET()               // [val]
+        pop                 // []
+}
+
+/// Enables a new module. Can only be called by the safe. 
+#define macro ENABLE_MODULE() = takes(0) returns (0) {
+  AUTHORIZED()
+  0x04 calldataload   // [module]
+  dup1                // [module, module]
+
+  /////// require(module != address(0))
+  0x00 eq             // [bool, module]
+  revertCall jumpi    // [module]
+  dup1                // [module, module]
+  [SENTINEL_MODULES]  // [sentinel_modules, module, module]
+  eq revertCall jumpi // [module]
+  ///////
+
+  /////// require(modules[module] == address(0))
+  dup1                // [module, module]
+  [MODULES_SLOT]      // [modules_slot, module, module]
+  GET()               // [res, module]
+  0x00 lt             // [bool, module]
+  revertCall jumpi    // [module]
+
+  [SENTINEL_MODULES]  // [sentinel_modules, module]
+  [MODULES_SLOT]      // [modules_slot, sentinel_modules, module]
+  GET()               // [val, module]
+
+  [MODULES_SLOT]      // [modules_slot, val, owner]
+
+  // modules[module] = modules[sentinel_modules];
+  SET()               // []
+
+  [SENTINEL_MODULES]  // [sentinel_modules]
+  0x04 calldataload   // [module, sentinel_modules]
+  [MODULES_SLOT]      // [modules_slot, module, sentinel_modules]
+
+  // modules[sentinel_modules] = module
+  SET()               // []
+
+  
+  0x01 0x20 mstore 
+  0x20 0x20 return
+
+  revertCall:
+      0x00 0x00 mstore 
+      0x00 0x00 revert
+}
+
+/// Disables the module for the Safe. 
+#define macro DISABLE_MODULE() = takes(0) returns (0){
+  AUTHORIZED()
+
+  0x24 calldataload     // [module]
+  dup1                  // [module, module]
+
+  /////// require(module != address(0) && module != SENTINEL_MODULES)
+  0x00 eq               // [bool, module]
+  revertCall jumpi      // [module]
+  [SENTINEL_MODULES]    // [sentinel_modules, module]
+  eq                    // [bool]
+  revertCall jumpi      // []
+  ///////
+
+  /////// require(modules[prevModule] == module)
+  0x04 calldataload     // [prevModule]
+  [MODULES_SLOT]        // [modules_slot, prevModule]
+  GET() dup1            // [res, res]
+  0x24 calldataload     // [module, res, res]
+  lt                    // [bool, res]
+  revertCall jumpi      // [res]
+  0x24 calldataload     // [module, res]
+  gt                    // [bool]
+  revertCall jumpi 
+  ///////
+
+  // modules[prevModule] = modules[module]
+  0x04 calldataload     // [prevModule]
+  0x24 calldataload     // [module, prevModule]
+  [MODULES_SLOT]        // [modules_slot, module, prevModule]
+  GET()                 // [val, prevModule]
+  [MODULES_SLOT]        // [modules_slot, val, prevModule]
+  SET()                 // []
+
+  //  modules[module] = address(0);
+  0x24 calldataload     // [module]
+  0x00                  // [0x00, module]
+  [MODULES_SLOT]        // [modules_slot, 0x00, module]
+  SET()                 // []
+
+  // Return true. 
+  0x01 0x20 mstore 
+  0x20 0x20 return 
+
+  revertCall:
+      0x00 0x00 mstore 
+      0x00 0x00 revert
+}
+
+
+/// Executes a transaction from an authorized module. 
+#define macro EXEC_TRANSACTION_FROM_MODULE() = {
+  // require(modules[msg.sender] != address(0))
+  caller                // [msg.sender]
+  [MODULES_SLOT]        // [modules_slot, msg.sender]
+  GET()                 // [res]
+  0x00 eq               // [bool]
+  revertCall jumpi      // []
+
+  // gas 
+  gas                   // [gas]
+
+  // operation 
+  0x64 calldataload     // [operation, gas]
+ 
+  // pointer 
+  0x44 calldataload 
+  0x04 add              // [ptr, operation, gas]
+
+  // value 
+  0x24 calldataload     // [value, ptr, operation, gas]
+
+  // to 
+  0x04 calldataload     // [to, value, ptr, operation, gas]
+
+  EXECUTE()             // [bool]
+  
+  0x20 mstore           // []
+  0x20 0x20 return
+
+  revertCall:
+      0x00 0x00 mstore
+      0x00 0x00 revert
+} 
+
+/// Returns true if the provided address is a current safe module. 
+#define macro IS_MODULE_ENABLED() =  takes(0)  returns (0) {
+  0x04 calldataload     // [module]
+  dup1                  // [module, module]
+  [SENTINEL_MODULES]    // [sentinel_modules, module, module]
+  eq                    // [bool, module]
+  returnFalse jumpi     // [module]
+
+  [MODULES_SLOT]        // [modules_slot, module]
+
+  GET()                 // [res]
+  0x00                  // [0x00, res]
+  eq                    // [bool]
+  returnFalse jumpi     // []
+  
+  // Return true. 
+  0x01 0x20 mstore 
+  0x20 0x20 return 
+
+  returnFalse:
+      0x00 0x20 mstore 
+      0x20 0x20 return
+}

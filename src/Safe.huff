@@ -1,0 +1,764 @@
+/// @title Safe
+/// @notice SPDX-License-Identifier: MIT
+/// @notice Safe rewrite in Huff.
+/// @author Rodrigo Herrera I.
+
+#include "./base/Executor.huff"
+#include "./base/ModuleManager.huff"
+#include "./base/OwnerManager.huff"
+#include "./common/NativeCurrencyPaymentFallback.huff"
+#include "./common/SecuredTokenTransfer.huff"
+#include "./common/Singleton.huff"
+
+// /*//////////////////////////////////////////////////////////////
+//                            INTERFACE
+// //////////////////////////////////////////////////////////////*/
+
+#define function addOwnerWithThreshold(address,uint256) nonpayable returns ()
+#define function changeThreshold(uint256) nonpayable returns ()
+#define function disableModule(address,address) nonpayable returns ()
+#define function domainSeparator() view returns (bytes32)
+#define function enableModule(address) nonpayable returns ()
+#define function encodeTransactionData(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256) view returns (bytes memory)
+#define function execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes) payable returns (bool)
+#define function execTransactionFromModule(address,uint256,bytes,uint8) nonpayable returns (bool)
+#define function getChainId() view returns (uint256)
+#define function getOwners() view returns (address[] memory)
+#define function getSingleton() view returns (address)
+#define function getThreshold() view returns (uint256)
+#define function getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256) view returns (bytes32)
+#define function isModuleEnabled(address) nonpayable returns ()
+#define function isOwner(address) view returns (bool)
+#define function nonce() view returns (uint256)
+#define function ownerCount() view returns (uint256)
+#define function removeOwner(address,address,uint256) nonpayable returns ()
+#define function setup(address[],uint256,address,bytes,address,address,uint256,address) payable returns ()
+#define function VERSION() view returns (string)
+
+/*//////////////////////////////////////////////////////////////
+//                             METADATA
+//////////////////////////////////////////////////////////////*/
+
+// Version = "1.4.0" ASCII encoded
+#define constant VERSION = 0x312e342e30000000000000000000000000000000000000000000000000000000
+#define constant VERSION_LENGTH = 0x05
+
+ /*//////////////////////////////////////////////////////////////
+ //                            EVENTS
+ //////////////////////////////////////////////////////////////*/
+#define event ExecutionSuccess(bytes32, uint256)
+#define event ExecutionFailure(bytes32, uint256)
+
+// /*//////////////////////////////////////////////////////////////
+//                             CONSTANTS
+// //////////////////////////////////////////////////////////////*/
+
+// Storage slot 5 -> "uint256 nonce"
+#define constant NONCE_SLOT = 0x0000000000000000000000000000000000000005
+
+// keccak256(
+    //     "EIP712Domain(uint256 chainId,address verifyingContract)"
+// );
+#define constant DOMAIN_SEPARATOR_TYPEHASH = 0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218
+
+// keccak256(
+    //     "SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)"
+// );
+#define constant SAFE_TX_TYPEHASH = 0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8
+
+#define macro CONSTRUCTOR() = {
+    // We set the threshold to 1 so the singleton becomes unusable.
+    0x01                // [0x01]
+    [THRESHOLD_SLOT]    // [THRESHOLD_SLOT, 0x01]
+    sstore              // []
+}
+
+/// Configures the safe. Can only be called once. 
+#define macro SETUP() = takes(0) returns (0) {
+    /////// if (fallbackHandler != address(0)) internalSetFallbackHandler(fallbackHandler);
+    0x84 calldataload               // [handler]
+    dup1                            // [handler, handler]
+    0x00 eq                         // [bool, handler]
+    popIt jumpi                     // [handler]
+    [FALLBACK_HANDLER_STORAGE_SLOT] // [slot, handler]
+    sstore                          // []
+    continueJump jump 
+    ///////           
+
+
+    popIt:
+        pop                    // []
+
+    
+    continueJump:
+        // .. 
+
+    // setupOwners checks if the Threshold is already set, therefore preventing that this method is called twice
+    SETUP_OWNERS()             // []
+
+    SETUP_MODULES()            // []
+
+
+    0xC4 calldataload          // [payment]
+    0x0 gt handlePaymentJump   // []
+    skipJump jump 
+
+    handlePaymentJump:
+        0xE4 calldataload       // [paymentReceiver]
+        0xA4 calldataload       // [paymentToken, paymentReceiver]
+        0x1                     // [gasPrice, paymentToken, paymentReceiver]
+        0x00                    // [baseGas, gasPrice, paymentToken, paymentReceiver]
+        0xC4 calldataload       // [payment, baseGas, gasPrice, paymentToken, paymentReceiver]
+
+        // todo: This should return the payment not a boolean
+        HANDLE_PAYMENT()
+
+    skipJump:
+        
+    // todo: This should return the payment.
+    0x01 0x20 mstore 
+    0x20 0x20 return 
+}
+
+/// Returns the address of the singleton.
+#define macro GET_SINGLETON() = takes(0) returns (0) {
+    [SINGLETON_SLOT]   // [SINGLETON_SLOT]
+    sload              // [SINGLETON_ADDRESS]    
+
+    0x00 mstore        // []
+    0x20 0x00 return   // []
+}
+
+#define macro DOMAIN_SEPARATOR() = takes(0) returns (0) {
+    [DOMAIN_SEPARATOR_TYPEHASH]  // [SAFE_TX_TYPEHASH]
+    0x00 mstore                  // []
+    
+    chainid                      // [chainid]
+    0x20 mstore                  // []    
+
+    address                      // [this]
+    0x40 mstore                  // []
+
+    // length 
+    0x60                         // [length]
+
+    // offset 
+    0x00                         // [offset, length]
+    
+    sha3                         // [domainSeparator]
+
+    0x80 mstore                  // []
+    0x20 0x80 return 
+}
+
+/// The safe version -> "1.4.0".
+#define macro GET_VERSION() = takes(0) returns (0) {
+    // When returning a string, the decoding schema works as follows: 
+    // First 32 bytes is the memory offset (left padded). 
+    // Second 32 bytes is the length of the returned statement (left padded).
+    // Third 32 bytes is the returned statement (right padded) in hex.
+
+    // First 32 bytes, memory offset.
+    0x20 0x00 mstore  
+
+    [VERSION_LENGTH]     // [VERSION_LENGTH]
+    0x20                 // [0x20, VERSION_LENGTH]     
+
+    // Second 32 bytes, the length of the returned statement.    
+    mstore               // []
+
+    [VERSION]            // [VERSION]
+    0x40                 // [0x40, VERSION]
+
+    // Third 32 bytes, the returned statement in hex.
+    mstore              // [] 
+
+    // The length of the returned statement.
+    0x60                // [0x60]  
+
+    // The memory offset.
+    0x00                // [0x00, 0x60]  
+   
+    return              // []
+}
+
+/// Returns the nonce of the executing safe.
+#define macro GET_NONCE() = takes(0) returns (0) {
+    [NONCE_SLOT]      // [NONCE_SLOT]
+    sload             // [nonce]
+
+    0x00 mstore       // []
+    0x20 0x00 return  // []
+}
+
+/// Returns the chain id of the executing safe.
+#define macro GET_CHAIN_ID() = takes(0) returns (0) {
+    chainid            // [chainId]
+
+    0x00 mstore        // []
+    0x20 0x00 return   // []
+}
+
+/// Handles the payment for a Safe transaction.
+/// @todo This should return the payment instead of a boolean
+#define macro HANDLE_PAYMENT() = takes(5) returns (1) {
+    // stack ->                 [gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+    dup4                     // [gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+
+    /////// address payable receiver = refundReceiver == address(0) ? payable(tx.origin) : refundReceiver;
+    0x00                     // [0x00, gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+    dup7                     // [refundReceiver, 0x00, gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+    eq                       // [bool, gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+    receiverOrigin jumpi     // [gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+    receiverJump jump 
+
+    receiverOrigin:          // [gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+        origin               // [origin, gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+        swap6 pop            // [gasToken, gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+
+    
+    receiverJump:
+    ///////
+
+
+    // if gasToken == address(0)
+    0x00 eq jump_1 jumpi         // [gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+
+    // else 
+    jump_2 jump                  // [gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+
+    jump_1:                      // [gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+    // payment = gasUsed.add(baseGas).mul(gasPrice < tx.gasprice ? gasPrice : tx.gasprice)
+            add                  // [gasUsed.add(baseGas), gasPrice, gasToken, refundReceiver]
+            swap1                // [gasPrice, gasUsed.add(baseGas), gasToken, refundReceiver]
+            dup1                 // [gasPrice, gasPrice, gasUsed.add(baseGas), gasToken, refundReceiver]     
+            gasprice             // [tx.gasprice, gasPrice, gasPrice, gasUsed.add(baseGas), gasToken, refundReceiver]
+            lt                   // [bool, gasPrice, gasUsed.add(baseGas), gasToken, refundReceiver]
+            gasPriceJump jumpi   // [gasPrice, gasUsed.add(baseGas), gasToken, refundReceiver]
+
+            txGasJump jump       // [gasPrice, gasUsed.add(baseGas), gasToken, refundReceiver]
+
+        gasPriceJump:
+            mul                  // [payment, gasToken, refundReceiver]
+            0x8FC                // [txGas, payment, gasToken, refundReceiver]
+            swap3                // [refundReceiver, payment, gasToken, txGas]
+            0x00                 // [operation, refundReceiver, payment, gasToken, txGas]
+            swap3                // [gasToken, refundReceiver, payment, operation, txGas]
+            pop                  // [refundReceiver, payment, operation, txGas]
+            EXECUTE()            // [success]
+            0x00 eq revertCall jumpi 
+
+            end jump 
+
+        txGasJump:
+            pop                  // [gasUsed.add(baseGas), gasToken, refundReceiver]
+            gasprice mul         // [payment, gasToken, refundReceiver]
+            0x8FC                // [txGas, payment, gasToken, refundReceiver]
+            swap3                // [refundReceiver, payment, gasToken, txGas]
+            0x00                 // [operation, refundReceiver, payment, gasToken, txGas]
+            swap3                // [gasToken, refundReceiver, payment, operation, txGas]
+            pop                  // [refundReceiver, payment, operation, txGas]
+            EXECUTE()            // [success]
+            0x00 eq revertCall jumpi 
+
+            end jump
+
+     
+    jump_2:                 // [gasUsed, baseGas, gasPrice, gasToken, refundReceiver]
+        add                 // [gasUsed.add(baseGas), gasPrice, gasToken, refundReceiver]
+        mul                 // [payment, gasToken, refundReceiver]
+        swap2               // [refundReceiver, gasToken, payment]
+        swap1               // [gasToken, refundReceiver, payment]
+        TRANSFER_TOKEN()    // [success]
+        0x0 eq revertCall jumpi 
+        end jump 
+
+    
+    revertCall:
+      0x00 0x00 mstore 
+      0x00 0x00 revert
+    
+    end:
+       // .. 
+}
+
+/// Main entry point to execute transactions.
+/// @todo guardian manager.
+#define macro EXEC_TRANSACTION() = takes(0) returns (0) {
+    [NONCE_SLOT] sload                  // [nonce]
+    GET_TRANSACTION_HASH_INTERNAL()     // [txHash, nonce]
+    
+    ////// Increase nonce to avoid replay attacks. 
+    swap1                               // [nonce, txHash]                    
+    0x1                                 // [0x1, nonce, txHash]
+    add                                 // [nonce++, txHash] 
+    [NONCE_SLOT]                        // [NONCE_SLOT, nonce++, txHash]
+    sstore                              // [txHash] 
+    //////
+
+    // Check that the signatures belong to the owner(s) + the threshold is met.
+    CHECK_SIGNATURES()          // [txHash]
+
+    // gas
+    gas                         // [gas, txHash]
+
+    // operation
+    0x64 calldataload           // [operation, gas, txHash]
+
+    // pointer 
+    0x44 calldataload 0x04 add  // [ptr, operation, gas, txHash]
+
+    // value 
+    0x24 calldataload           // [value, ptr, operation, gas, txHash]
+
+    // to 
+    0x04 calldataload           // [to, value, ptr, operation, gas, txHash]
+
+    // Once signatures passed, let's execute the transaction. 
+    EXECUTE()                  // [success, txHash]
+
+    // If success, emit success event. 
+    0x1 eq emitSuccess jumpi   // [txHash]
+
+    // Else, emit failure event. 
+    emitFailure jump 
+
+    emitFailure:
+        0x00 swap1                      // [txHash, payment]
+        0x00 mstore                     // [payment]
+        0x20 mstore                     // []
+        __EVENT_HASH(ExecutionFailure)  // [sig]
+        0x40                            // [size, sig]
+        0x00                            // [offset, size, sig]
+        log1                            // []
+        0x0 endTx jump                  // [bool]
+
+    emitSuccess:
+        0x00 swap1                      // [txHash, payment]
+        0x00 mstore                     // [payment]
+        0x20 mstore                     // []
+        __EVENT_HASH(ExecutionSuccess)  // [sig]
+        0x40                            // [size, sig]
+        0x00                            // [offset, size, sig]
+        log1                            // []
+        0x1 endTx jump                  // [bool]
+
+
+
+    endTx:          // [success]                
+        0x20 mstore                                     // []
+        0x20 0x20 return
+}
+
+
+/// Pushes the transaction hash to the stack + the nonce. 
+#define macro ENCODE_TRANSACTION_DATA_INTERNAL() = {
+   // bytes32 safeTxHash = keccak256(
+   //         abi.encode(
+   //             SAFE_TX_TYPEHASH,
+   //             to,
+   //             value,
+   //             keccak256(data),
+   //             operation,
+   //             safeTxGas,
+   //             baseGas,
+   //             gasPrice,
+   //             gasToken,
+   //             refundReceiver,
+   //             _nonce
+   //        )
+   //   );
+        
+   // return abi.encodePacked(bytes1(0x19), bytes1(0x01), domainSeparator(), safeTxHash);
+
+   // Memory is completely empty at this point.
+   [SAFE_TX_TYPEHASH]         // [SAFE_TX_TYPEHASH, nonce]
+   0x00 mstore                // [nonce]
+
+   0x04 calldataload          // [to, nonce]
+   0x20 mstore                // [nonce]
+
+   0x24 calldataload          // [value, nonce]
+   0x40 mstore                // [nonce]
+
+   // From here on we are carefully writing to occupied memory.
+   GET_KECCAK256_DATA()       // [keccak256(data), nonce]
+   0x60 mstore                // [nonce]
+   
+   0x64 calldataload          // [operation, nonce]
+   0x80 mstore                // [nonce]
+
+   0x84 calldataload          // [safeTxGas, nonce]
+   0xA0 mstore                // [nonce]
+
+   0xA4 calldataload          // [baseGas, nonce]
+   0xC0 mstore                // [nonce]
+
+   0xC4 calldataload          // [gasPrice, nonce]
+   0xE0 mstore                // [nonce]
+
+   0xE4 calldataload          // [gasToken, nonce]
+   0x100 mstore               // [nonce]
+
+   0x104 calldataload         // [refundReceiver, nonce]
+   0x120 mstore               // [nonce]
+
+   // We will use the nonce later on, let's keept it in the stack
+   // to avoid a future sload. 
+   dup1                       // [nonce, nonce]
+   0x140 mstore               // [nonce]
+
+   // length
+   0x160                      // [length, nonce]
+
+   // offset 
+   0x00                        // [offset, length, nonce]
+
+   // bytes32 safeTxHash = keccak256(...)
+   sha3                       // [safeTxHash, nonce]  
+
+   
+    ////// We get the domain separator. 
+    // Caution: We are writing to used memory.
+    [DOMAIN_SEPARATOR_TYPEHASH]  // [SAFE_TX_TYPEHASH]
+    0x00 mstore                  // []
+    
+    chainid                      // [chainid]
+    0x20 mstore                  // []    
+
+    address                      // [this]
+    0x40 mstore                  // []
+
+    // length 
+    0x60                         // [length]
+
+    // offset 
+    0x00                         // [offset, length]
+    
+    sha3                         // [domainSeparator]
+   //////
+
+   // Stack ->                 [domainSeparator, safeTxHash, nonce]
+   __RIGHTPAD(0x01)         // [0x01, domainSeparator, safeTxHash, nonce]
+   __RIGHTPAD(0x19)         // [0x19, 0x01, domainSeparator, safeTxHash, nonce]
+
+   // We store it in memory. 
+   0x40 mstore              // [0x01, domainSeparator, safeTxHash, nonce]
+   0x41 mstore              // [domainSeparator, safeTxHash, nonce]
+   0x42 mstore              // [safeTxHash, nonce]
+   0x62 mstore              // [nonce]
+}   
+
+/// Returns the pre-image of the transaction hash.
+#define macro ENCODE_TRANSACTION_DATA() = {
+    // We load the nonce. 
+    0x124 calldataload               // [nonce]
+
+    ENCODE_TRANSACTION_DATA_INTERNAL()
+    // The transaction data is currently stored in memory from 
+    // pos 40 to 62. 
+
+    // First 32 bytes is the memory offset. 
+    0x20 0x00 mstore 
+
+    // Followed by the length. 
+    0x42 0x20 mstore
+
+    0xA2 0x00 return
+}
+
+#define macro GET_TRANSACTION_HASH_INTERNAL() = {
+    ENCODE_TRANSACTION_DATA_INTERNAL()
+    // The transaction data is currently stored in memory from 
+    // pos 40 to 62. 
+
+    // length
+    0x42                     // [length, nonce]
+
+    // offset
+    0x40                     // [offset, length, nonce]
+
+    sha3                     // [txHash, nonce]
+}
+
+/// Returns the transaction hash. 
+#define macro GET_TRANSACTION_HASH() = {
+    
+    // We load the nonce. 
+    0x124 calldataload               // [nonce]
+    GET_TRANSACTION_HASH_INTERNAL()  // [txHash, nonce]
+    0x00 mstore                      // [nonce]
+    pop                              // []
+    0x20 0x00 return                 // []
+}
+
+#define macro CHECK_SIGNATURES() = {
+    // stack ->                [txHash] 
+    
+   [THRESHOLD_SLOT] sload   // [threshold, txHash] 
+    // require(threshold > 0)
+    dup1                    // [threshold, threshold, txHash]
+    0x1 swap1 lt            // [bool, threshold, txHash]
+    revertCall jumpi        // [threshold, txHash]
+    // 
+    
+    
+    // last owner
+    0x00                    // [lastOwner, threshold, txHash]
+   
+    // i 
+    0x0                     // [i, lastOwner, threshold, txHash]
+    dup1                    // [i, i, lastOwner, threshold, txHash]
+
+    // for i < threshold; ++i
+
+    /// @todo we also need to accept smart contract signatures and v > 30)
+    for:                     // [i, i, lastOwner, threshold, txHash]
+       SIGNATURE_SPLIT()     // [v, r, s, i, lastOwner, threshold, txHash]
+
+        // else 
+        // Let's call ecrecover. 
+        ECRECOVER_INTERNAL() // [signer, i, lastOwner, threshold, txHash]
+
+        requireOwner:
+            ////// require(currentOwner > lastOwner && owners[currentOwner] != address(0))
+
+            // If lastOwner > currentOwner, revert.
+            dup1               // [signer, signer, i, lastOwner, threshold, txHash]          
+            dup4               // [lastOwner, signer, signer, i, lastOwner, threshold, txHash]           
+            eq                 // [bool, signer, i, lastOwner, threshold, txHash]
+            revertCall jumpi   // [signer, i, lastOwner, threshold, txHash]   
+            dup1               // [signer, signer, i, lastOwner, threshold, txHash]
+            dup4               // [lastOwner, signer, signer, i, lastOwner, threshold, txHash] 
+            gt                 // [bool, signer, i, lastOwner, threshold, txHash]
+            revertCall jumpi   // [signer, i, lastOwner, threshold, txHash]   
+            // 
+
+            dup1                // [signer, signer, i, lastOwner, threshold, txHash]
+
+            // If currentOwner is not an owner, revert.
+            [OWNERS_SLOT]       // [OWNERS_SLOT, signer, signer, i, lastOwner, threshold, txHash]
+            GET()               // [res, signer, i, lastOwner, threshold, txHash]
+            0x00 eq             // [bool, signer, i, lastOwner, threshold, txHash]
+            revertCall jumpi    // [signer, i, lastOwner, threshold, txHash]
+            //////
+
+
+            ////// We increase i and check if the loop ended. 
+            swap1 0x01 add      // [i++, signer, lastOwner, threshold, txHash]
+            dup4                // [threshold, i, signer, lastOwner, threshold, txHash]
+
+            dup2                // [i, threshold, i, signer, lastOwner, threshold, txHash]          
+            eq                  // [bool, i, signer, lastOwner, threshold, txHash]
+            endLoop jumpi       // [i, signer, lastOwner, threshold, txHash] 
+            //////
+            
+
+            // If the loop has not ended, let's sanitize the stack and repeat. 
+            //      stack ->       [i, signer, lastOwner, threshold, txHash]
+            swap2               // [lastOwner, signer, i, threshold, txHash]
+            pop                 // [signer, i, threshold, txHash]
+            swap1               // [i, signer, threshold, txHash]
+            dup1                // [i, i, signer, threshold, txHash]
+            for jump 
+
+
+        revertCall:
+            0x00 0x00 mstore 
+            0x00 0x00 revert
+
+        
+    endLoop:
+         //       stack -->    [i, signer, lastOwner, threshold, txHash]
+         pop pop pop pop    // [txHash]
+}
+
+
+/// Calls ecrecover 'address(0x1)' and pushes the result to the stack.
+#define macro ECRECOVER_INTERNAL() = {
+    // Stack items ->   [v, r, s, i, lastOwner, threshold, txHash]
+
+    // Lets's get the transaction hash on top of the stack. 
+    dup7             // [txHash, v, r, s, i, lastOwner, threshold, txHash]
+
+    // We store the transaction hash in scratch space first 32 bytes. 
+    0x00 mstore      // [v, r, s, i, lastOwner, threshold, txHash]
+
+    // v 
+    0x20 mstore     // [r, s, i, lastOwner, threshold, txHash]
+
+    // r 
+    0x40 mstore     // [s, i, lastOwner, threshold, txHash]
+
+    // s
+    0x60 mstore     // [i, lastOwner, threshold, txHash]
+
+
+    ////// Let's call ecrecover. 
+    0x20                    // [retSize, i, lastOwner, threshold, txHash]
+
+    // Save the response in memory i * 0x20. 
+    dup2 0x20 mul           
+    0xA0 add                // [retOffset, retSize, i, lastOwner, threshold, txHash]
+    0x80                    // [argSize, retOffset, retSize, i, lastOwner, threshold, txHash]
+    0x00                    // [argOffset, argSize, retOffset, retSize, i, lastOwner, threshold, txHash]
+    0x1                     // [address, argOffset, argSize, retOffset, retSize, i, lastOwner, threshold, txHash]
+    gas                     // [gas, address, argOffset, argSize, retOffset, retSize, i, lastOwner, threshold, txHash]
+    staticcall              // [bool, i, lastOwner, threshold, txHash] 
+    ////// 
+
+    // We don't care about this boolean. 
+    pop                     // [i, lastOwner, threshold, txHash] 
+
+    // We load the signer to the stack. 
+    // We really don't need to check if the returned signer is address(0x0). 
+    // Even if it is, the transaction will fail later on -> require(owners[currentOwner] != address(0x0)).
+    dup1                    // [i, i, lastOwner, threshold, txHash] 
+    0x20 mul                // [(i*20), i, lastOwner, threshold, txHash]
+    0xA0 add                // [res, i, lastOwner, threshold, txHash]
+    mload                   // [signer, i, lastOwner, threshold, txHash]
+}
+
+/// Decodes the signature into its (v, r, s) values. 
+/// Pushes (v, r, s) on top of the stack.
+#define macro SIGNATURE_SPLIT() = {
+    // stack ->               [pos, i, lastOwner, threshold, txHash]
+
+    // Multiply the position by the length of a signature (65)
+    0x41 mul               // [pos, i, lastOwner, threshold, txHash]
+
+    // We load the pointer of the signatures. 
+    0x124 calldataload      // [pointer, pos, i, lastOwner, threshold, txHash]
+
+    // Depending on the iteration loop, we add it with the pos. 
+    add                    // [pointer, i, lastOwner, threshold, txHash]
+    dup1                   // [pointer, pointer, i, lastOwner, threshold, txHash]
+
+    // s
+    0x44 add calldataload  // [s, pointer, i, lastOwner, threshold, txHash]
+    swap1                  // [pointer, s, i, lastOwner, threshold, txHash]
+    dup1                   // [pointer, pointer, s, i, lastOwner, threshold, txHash]
+
+    // r 
+    0x24 add calldataload  // [r, pointer, s, i, lastOwner, threshold, txHash]
+    swap1                  // [pointer, r, s, i, lastOwner, threshold, txHash]
+
+    // v
+    0x64 add calldataload  // [v, r, s, i, lastOwner, threshold, txHash]
+
+    // sanitize v
+    0x00 byte              // [v, r, s, i, lastOwner, threshold, txHash]
+}
+
+/// Pushes the keccak256 hash of the data to the stack
+#define macro GET_KECCAK256_DATA() = {
+    // First we get the data length.
+    // The data length will always be at 0x144 because there are not
+    // dynamic types prior to "data", therefore all prior arguments are 32 byte encoded.
+    0x144 calldataload        // [size]
+
+    // offset
+    0x164                     // [offset, size]
+
+    // destOffset
+    0x60                      // [destOffset, offset, size]
+    calldatacopy              // []
+
+    0x144 calldataload        // [size]
+    0x60  sha3                // [keccak256(data)]
+}
+
+
+/// Function dispatcher.
+#define macro MAIN() = takes(0) returns (0) {   
+    0x00 calldataload 0xE0 shr 
+
+    dup1 __FUNC_SIG(execTransaction) eq execTransactionJump jumpi
+
+    0x00 callvalue gt nativeCurrencyPaymentFallbackJump jumpi
+
+    dup1 __FUNC_SIG(setup) eq setupJump jumpi
+
+    dup1 __FUNC_SIG(getTransactionHash) eq getTransactionHashJump jumpi
+
+    dup1 __FUNC_SIG(encodeTransactionData) eq encodeTransactionDataJump jumpi
+
+    dup1 __FUNC_SIG(domainSeparator) eq domainSeparatorJump jumpi
+
+    dup1 __FUNC_SIG(addOwnerWithThreshold) eq addOwnerWithThresholdJump jumpi
+    
+    dup1 __FUNC_SIG(removeOwner) eq removeOwnerJump jumpi
+
+    dup1 __FUNC_SIG(getThreshold) eq getThresholdJump jumpi 
+
+    dup1 __FUNC_SIG(changeThreshold) eq changeThresholdJump jumpi
+
+    dup1 __FUNC_SIG(execTransactionFromModule) eq execTransactionFromModuleJump jumpi 
+
+    dup1 __FUNC_SIG(nonce) eq nonceJump jumpi
+
+    dup1 __FUNC_SIG(getOwners) eq getOwnersJump jumpi
+
+    dup1 __FUNC_SIG(isOwner) eq isOwnerJump jumpi
+
+    dup1 __FUNC_SIG(getChainId)eq getChainIdJump jumpi
+
+    dup1 __FUNC_SIG(ownerCount) eq ownerCountJump jumpi
+
+    dup1 __FUNC_SIG(enableModule) eq enableModuleJump jumpi
+
+    dup1 __FUNC_SIG(disableModule) eq disableModuleJump jumpi 
+
+    dup1 __FUNC_SIG(isModuleEnabled) eq isModuleEnabledJump jumpi 
+
+    dup1 __FUNC_SIG(getSingleton) eq getSingletonJump jumpi
+
+    dup1 __FUNC_SIG(VERSION) eq VERSIONJump jumpi
+
+    invalidFunctionSignature:
+        0x00 0x00 mstore 
+        0x00 0x00 revert
+
+    execTransactionJump:
+        EXEC_TRANSACTION()
+    setupJump:
+        SETUP()
+    nativeCurrencyPaymentFallbackJump:
+        NATIVE_CURRENCY_PAYMENT_FALLBACK()
+    getTransactionHashJump:
+        GET_TRANSACTION_HASH()
+    encodeTransactionDataJump:
+        ENCODE_TRANSACTION_DATA()
+    domainSeparatorJump:
+        DOMAIN_SEPARATOR()
+    addOwnerWithThresholdJump:
+        ADD_OWNER_WITH_THRESHOLD()
+    removeOwnerJump:
+        REMOVE_OWNER()
+    execTransactionFromModuleJump:
+        EXEC_TRANSACTION_FROM_MODULE()
+    getThresholdJump:
+        GET_THRESHOLD()
+    changeThresholdJump:
+        CHANGE_THRESHOLD()
+    getOwnersJump:
+        GET_OWNERS()
+    isOwnerJump:
+        IS_OWNER()
+    getChainIdJump:
+        GET_CHAIN_ID()
+    nonceJump:
+        GET_NONCE()
+    getSingletonJump:
+        GET_SINGLETON()
+    ownerCountJump:
+        OWNER_COUNT()
+    enableModuleJump:
+        ENABLE_MODULE()
+    disableModuleJump:
+        DISABLE_MODULE()
+    isModuleEnabledJump:
+        IS_MODULE_ENABLED()
+    VERSIONJump:
+        GET_VERSION()
+}

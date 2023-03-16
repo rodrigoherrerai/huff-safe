@@ -1,0 +1,10 @@
+
+// keccak256("fallback_manager.handler.address")
+#define constant FALLBACK_HANDLER_STORAGE_SLOT = 0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5
+
+
+#define macro INTERNAL_SET_FALLBACK_HANDLER() = {
+    0x04 calldataload                   // [handler]
+    [FALLBACK_HANDLER_STORAGE_SLOT]     // [slot, handler]
+    sstore 
+}

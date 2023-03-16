@@ -1,0 +1,48 @@
+/// @title ProxyFactory
+/// @notice Proxy contract that delegates all call to a master singleton. 
+
+#define constant SINGLETON = FREE_STORAGE_POINTER() // 0x0000..
+
+// Constructor
+#define macro CONSTRUCTOR() = {   
+    0x20                         
+    0x20 codesize sub 
+    0x00 
+    codecopy 
+    0x00 mload 
+    dup1 
+    [SINGLETON]
+    sstore
+}
+
+
+#define macro MAIN() = {
+    calldatasize                // [calldatasize]
+    0x00 dup1                   // [0x0, 0x0, calldatasize]
+
+    // copies calldata to memroy
+    calldatacopy                // []
+    
+    // Delegatecalls to the singleton.
+    0x00 dup1                   // [0x0, 0x0]   
+    calldatasize                // [calldatasize, 0x0, 0x0]
+    0x00                        // [0x0, calldatasize, 0x0, 0x0]
+    [SINGLETON] sload           // [singleton, 0x0, calldatasize, 0x0, 0x0]
+    gas                         // [gas, singleton, 0x0, calldatasize, 0x0, 0x0]
+    delegatecall                // [success] 
+
+    // Copy the returned data.
+    returndatasize             // [returndatasize, success]
+    0x00 dup1                  // [0x0, 0x0, returndatasize, success]
+    returndatacopy             // [success]
+
+    // Revert if tx failed.
+    iszero revertCall jumpi    // []
+
+    // Return data.
+    returndatasize 0x00 return
+
+    revertCall:
+        returndatasize 0x00 revert
+}
+

@@ -1,0 +1,58 @@
+
+/// Executes a transaction.
+#define macro EXECUTE() = takes(5) returns (1) {
+    //     stack ->           // [to, value, ptr, operation, txGas]
+    0x00 dup1                 // [retSize, retOffset, to, value, ptr, operation, txGas]    
+    dup5                      // [ptr, retSize, retOffset, to, value, ptr, operation, txGas]
+    calldataload              // [argsSize, retSize, retOffset, to, value, ptr, operation, txGas]
+
+    // We copy the data to memory. 
+    dup1                      // [argsSize, argsSize, retSize, retOffset, to, value, ptr, operation, txGas]
+
+    // offset 
+    dup7 0x20 add             // [offset, argsSize, argsSize, retSize, retOffset, to, value, ptr, operation, txGas]     
+
+    // destOffset
+    0x80                     // [destOffset, offset, argsSize, argsSize, retSize, retOffset, to, value, ptr, operation, txGas]    
+    calldatacopy             // [argsSize, retSize, retOffset, to, value, ptr, operation, txGas]    
+
+    swap6                    // [operation, retSize, retOffset, to, value, ptr, argsSize, txGas]
+
+
+    // if operation == 0, call
+    0x00 eq callJump jumpi  // [retSize, retOffset, to, value, ptr, argsSize, txGas]
+
+
+    // else delegatecall. 
+    delegatecallJump jump 
+
+    delegatecallJump:       // [retSize, retOffset, to, value, ptr, argsSize, txGas]
+        swap6               // [txGas, retOffset, to, value, ptr, argsSize, retSize]
+        swap1               // [retOffset, txGas, to, value, ptr, argsSize, retSize]
+        swap5               // [argsSize, txGas, to, value, ptr, retOffset, retSize]
+        swap4               // [ptr, txGas, to, value, argsSize, retOffset, retSize]
+        pop                 // [txGas, to, value, argsSize, retOffset, retSize]
+        swap2               // [value, to, txGas, argsSize, retOffset, retSize]
+        pop                 // [to, txGas, argsSize, retOffset, retSize]
+        0x80                // [argsOffset, to, txGas, argsSize, retOffset, retSize]
+        swap2               // [txGas, to, argsOffset, argsSize, retOffset, retSize]
+        delegatecall        // [success]
+        end jump 
+
+    
+    callJump:               // [retSize, retOffset, to, value, ptr, argsSize, txGas]    
+        swap6               // [txGas, retOffset, to, value, ptr, argsSize, retSize]
+        swap1               // [retOffset, txGas, to, value, ptr, argsSize, retSize]
+        swap5               // [argsSize, txGas, to, value, ptr, retOffset, retSize]
+        swap4               // [ptr, txGas, to, value, argsSize, retOffset, retSize]
+        pop                 // [txGas, to, value, argsSize, retOffset, retSize]
+        0x80                // [argsOffset, txGas, to, value, argsSize, retOffset, retSize]
+        swap3               // [value, txGas, to, argsOffset, argsSize, retOffset, retSize]
+        swap2               // [to, txGas, value, argsOffset, argsSize, retOffset, retSize]
+        swap1               // [txGas, to, value, argsOffset, argsSize, retOffset, retSize]
+        call                // [success]
+        end jump
+
+    end:
+      // [success]
+}

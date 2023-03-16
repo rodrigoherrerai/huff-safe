@@ -1,0 +1,44 @@
+// Returns the storage location for a given key and global slot.
+#define macro GET_STORAGE_LOCATION_FOR_KEY() = takes(0) returns (0) {
+        /// 
+            // Stack should contain the following items:
+            //     [key, slot]
+        /// 
+        0x00            // [0x00, key, slot]
+        mstore          // [slot]
+
+        0x20            // [0x20, slot]
+        mstore          // []
+
+        0x40 0x00       // [0x00, 0x40]
+        sha3            // [res]
+}
+
+#define macro SET() = takes(0) returns (0) {
+        /// 
+         // Stack should contain the following items:
+         //     [slot, value, key]
+        ///
+
+    swap1                                // [value, slot, key]
+    swap2                                // [key, slot, value]
+
+    GET_STORAGE_LOCATION_FOR_KEY()       // [res, value]
+
+    sstore                               // []
+}
+
+#define macro GET() = takes(0) returns (0) {
+    ///
+     // Stack should contain the following items:
+     //         [slot, key]
+    ///
+    
+    swap1                          // [key, slot]
+    GET_STORAGE_LOCATION_FOR_KEY() // [res]
+    
+    sload                          // [value]
+}
+
+
+

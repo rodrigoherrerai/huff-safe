@@ -1,0 +1,8 @@
+
+
+// Storage slot 0 -> "address singleton"
+#define constant SINGLETON_SLOT = 0x0000000000000000000000000000000000000000
+
+
+
+

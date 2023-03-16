@@ -1,0 +1,20 @@
+[profile.default]
+solc_version = '0.8.17'
+ffi = true
+out = 'out'
+libs = ['lib']
+ignored-error-codes = [2519, 2018, 1878, 2072]
+
+[fmt]
+line_length = 100
+tab_width = 4
+number_underscore = "thousands"
+
+[fuzz]
+runs = 10_000
+
+
+remappings = [
+  "forge-std=lib/forge-std/src/",
+  "foundry-huff=lib/foundry-huff/src/",
+]

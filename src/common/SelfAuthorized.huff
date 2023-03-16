@@ -1,0 +1,17 @@
+
+
+
+/// Only 'address(this)' should be able to call the given function.
+#define macro AUTHORIZED() = {
+    address             // [this]
+    caller              // [msg.sender, this]
+    eq                  // [bool]
+    successJump jumpi    
+
+    0x00 0x00 mstore
+    0x00 0x00 revert 
+
+
+    successJump:
+        // Silently do nothing, allow execution to continue.
+}

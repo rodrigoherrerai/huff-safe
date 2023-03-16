@@ -1,0 +1,15 @@
+
+
+#define event SafeReceived(address indexed, uint256)
+
+#define macro NATIVE_CURRENCY_PAYMENT_FALLBACK() =  { 
+    callvalue       // [callvalue]
+    caller          // ..
+
+    __EVENT_HASH(SafeReceived)
+    0x20 0x00 
+    log3
+
+    0x01 0x00 mstore 
+    0x20 0x00 return 
+}

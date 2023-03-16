@@ -1,0 +1,24 @@
+
+
+/// Transfers a token and returns a boolean if it was a success . 
+#define macro TRANSFER_TOKEN() = takes(3) returns (1) {
+    // stack ->                  [token, receiver, amount]
+    __RIGHTPAD(0xa9059cbb)    // [sig, token, receiver, amount]
+    0x00 mstore               // [token, receiver, amount]
+
+    swap1                     // [receiver, token, amount]
+    0x04 mstore               // [token, amount]
+
+    swap1                     // [amount, token]
+    0x24 mstore               // [token]
+
+
+    0x00 0x00                 // [retOffset, retSize, token] 
+    0x44                      // [argsSize, retOffset, retSize, token]
+    0x00                      // [argsOffset, argsSize, retOffset, retSize, token]
+    0x00                      // [value, argsOffset, argsSize, retOffset, retSize, token]
+    dup6                      // [token, value, argsOffset, argsSize, retOffset, retSize, token]
+    gas                       // [gas, token, value, argsOffset, argsSize, retOffset, retSize, token]
+    call                      // [success, token]
+    swap1 pop                 // [success]
+}

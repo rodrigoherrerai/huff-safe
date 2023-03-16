@@ -1,0 +1,8 @@
+#define macro STORAGE_READ() = takes(0) returns (0) {
+    0x04 calldataload 
+    sload 
+
+    0x00 mstore 
+
+    0x20 0x00 return
+}

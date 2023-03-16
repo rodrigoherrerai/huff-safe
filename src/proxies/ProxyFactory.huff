@@ -1,0 +1,159 @@
+/// @title ProxyFactory
+/// @notice SPDX-License-Identifier: MIT
+/// Factory that deploys proxy contracts.
+
+
+// /*//////////////////////////////////////////////////////////////
+//                            INTERFACE
+// //////////////////////////////////////////////////////////////*/
+#define function createProxyWithNonce(address, bytes memory, uint256) nonpayable returns (bytes32)
+
+
+// /*//////////////////////////////////////////////////////////////
+//                             CONSTANTS
+// //////////////////////////////////////////////////////////////*/
+
+#define constant PROXY_BYTECODE_0 = 0x6020602038036000396000518060005560238060193d393df336600080376000
+
+#define constant PROXY_BYTECODE_1  = 0x803660006000545af43d6000803e1561001e573d6000f35b3d6000fd00000000
+
+
+/// Creates a new proxy using CREATE2 and sets it up with init data.
+#define macro CREATE_PROXY_WITH_NONCE() = {
+    0x04 calldataload       // [singleton]
+    iszero                  // [bool]
+    invalidSingleton jumpi  // []
+
+    // bytes32 salt = keccak256(abi.encodePacked(keccak256(initializer), saltNonce));
+    GET_SALT()               // [salt]
+
+    // bytes memory deploymentData = abi.encodePacked(type(GnosisSafeProxy).creationCode, uint256(uint160(_singleton)));
+    SAVE_DEPLOYMENT_DATA()  
+
+    // data size. 
+    0x5c                     // [0x5c, salt]
+
+    // memory offset.
+    0x80                     // [0x80, 0x5c, salt]  
+
+    // value.
+    0x00                     // [0x00, 0x80, 0x5c, salt]   
+
+    create2 dup1             // [proxyAddr, proxyAddr]
+    iszero                   // [bool, proxyAddr]
+    isZeroRevert jumpi       // [proxyAddr]
+
+    // Now we get the initializer data. 
+    // @todo this process is repetitive, it should only be done in GET_SALT()
+    0x24 calldataload              // [offset, proxyAddr]
+    0x04 add calldataload dup1     // [size, size, proxyAddr]
+    0x24 calldataload  
+    0x20 add 
+    0x04 add                       // [pos, size, size, proxyAddr]
+    0x00                           // [0x00, pos, size, size, proxyAddr]
+
+    // We copy the initializer data in memory position 0x00.
+    calldatacopy                   // [size, proxyAddr]
+
+    // retSize 
+    0x00                           // [0x00, size, proxyAddr]
+
+    // retOffset        
+    0x00                           // [0x00, 0x00, size, proxyAddr]
+
+    // argsize
+    swap2                          // [size, 0x00, 0x00, proxyAddr]
+
+    // argsOffset
+    0x00                           // [0x00, size, 0x00, 0x00, proxyAddr]
+
+    // value
+    callvalue                      // [value, 0x00, size, 0x00, 0x00, proxyAddr]
+
+    // addr 
+    dup6                           // [proxyAddr, value, 0x00, size, 0x00, 0x00, proxyAddr]
+
+    // gas
+    gas                            // [gas, proxyAddr, value, 0x00, size, 0x00, 0x00, proxyAddr]
+    
+    call                           // [bool, proxyAddr]                  
+    iszero isZeroRevert jumpi      // [proxyAddr]
+
+    // Return the proxy address. 
+    0x00 mstore 
+    0x20 0x00 return
+    
+    invalidSingleton:
+       0x00 0x00 mstore
+       0x00 0x00 revert 
+       
+    isZeroRevert:
+        0x00 0x00 mstore 
+        0x00 0x00 revert
+}
+
+/// Saves the deployment data to memory location 0x00. 
+#define macro SAVE_DEPLOYMENT_DATA() = {
+    [PROXY_BYTECODE_0]    // [PROXY_BYTECODE_0]
+    0x80 mstore           // []
+
+    [PROXY_BYTECODE_1]    // [PROXY_BYTECODE_1]
+    0xA0 mstore           // []
+
+    0x04 calldataload     // [singleton]
+    0x00 mstore           // []
+    0x04 mload            // 
+    0xC0 mstore           // []
+}
+
+#define macro GET_SALT() = {
+    ///////// For this chunk of code, we are copying the initializer in memory.
+    0x24 calldataload              // [offset]
+
+    // We get the initializer size.
+    0x04 add calldataload          // [size]
+
+    // Now we get the calldata position.
+    0x24 calldataload  
+    0x20 add 
+    0x04 add                       // [pos, size]
+
+    // Copy position into memory.
+    0x00                           // [0x00, pos, size]
+
+    // We copy the initializer data in memory position 0x00.
+    calldatacopy                   // []
+    /////////
+
+    // Now we need to hash the initializer.
+    0x24 calldataload 
+    0x04 add calldataload        // [size]
+    0x00                         // [offset, size]
+    sha3                         // [keccak256(initializer)]
+
+    // We load the saltNonce to the stack. 
+    0x44 calldataload            // [saltNonce, keccak256(initializer)]
+    swap1                        // [keccak256(initializer), saltNonce]
+
+    // We save them in memory, each is 32 bytes.
+    0x00 mstore                  // [saltNonce]
+    0x20 mstore                  // []
+
+    // Now we get the salt. 
+    // keccak256(abi.encodePacked(keccak256(initializer), saltNonce));
+    0x40 0x00 sha3               // [salt]
+}
+
+/// Function dispatcher
+#define macro MAIN() =  {
+    0x00 calldataload 0xE0 shr
+
+    dup1 __FUNC_SIG(createProxyWithNonce) eq createProxyWithNonceJump jumpi
+
+    // If the function signature does not match the interface we revert.
+    0x00 0x00 mstore    
+    0x00 0x00 revert
+
+    createProxyWithNonceJump:
+        CREATE_PROXY_WITH_NONCE()
+}

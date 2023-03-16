@@ -1,0 +1,349 @@
+#include "../base/FallbackManager.huff"
+#include "../common/SelfAuthorized.huff"
+#include "../utils/HashMap.huff"
+
+// Sentinel address, THIS IS NOT A STORAGE SLOT.
+#define constant SENTINEL_OWNERS = 0x0000000000000000000000000000000000000001
+
+// Storage slot 2 -> "mapping(address => address) owners"
+#define constant OWNERS_SLOT = 0x0000000000000000000000000000000000000002
+
+// Storage slot 3 -> "uint256 ownerCount"
+#define constant OWNER_COUNT_SLOT = 0x0000000000000000000000000000000000000003
+
+// Storage slot 4 -> "uint256 threshold"
+#define constant THRESHOLD_SLOT = 0x0000000000000000000000000000000000000004
+
+/// Sets the initial owners + threshold.
+#define macro SETUP_OWNERS() = takes(0) returns (0) {
+    // If threshold is already set, revert the call. 
+
+    /////// 
+    // require(threshold == 0)
+    [THRESHOLD_SLOT] sload  // [threshold]
+    0x00 lt revertCall jumpi 
+
+    // require(_threshold > 0)
+    0x24 calldataload      // [_threshold]
+    dup1                   // [_threshold, _threshold] 
+    0x00 eq                // [bool, _threshold]
+    revertCall jumpi       // [_threshold]
+    ///////
+
+
+    0x04 calldataload dup1  // [offset, offset]
+
+    // The length of the owners array. 
+    0x04 add calldataload   //  [length, offset]
+
+    // We loop over the owners array and set i = 0. 
+    0x00                    //  [i, length, offset]
+
+    // We set the currentOwner to the sentinel_owners.
+    [SENTINEL_OWNERS]       //  [currentOwner, i, length, offset]
+
+    loopJump jump
+    loopJump:   // Each loop should start with the following 
+                // stack items:  [currentOwner, i, length, offset]
+
+        ///////// For this chunk of code, we are retrieving the owner address.
+        ////////  Depending on the iteration loop, we get addr at pos i.
+        0x20                // [0x20, currentOwner, i, length, offset]
+        dup3                // [i, 0x20, currentOwner, i, length, offset]
+        mul                 // [mul(0x20, i), currentOwner, i, length, offset]
+        dup5                // [offset, mul(0x20, i), currentOwner, i, length, offset]  
+        add                 // [add(offset,mul(0x20, i)), currentOwner, i, length, offset]   
+        0x24                // [0x24, add(offset,mul(0x20, i)), currentOwner, i, length, offset]  
+        add                 // [add(0x24, add(offset,mul(0x20, i))), currentOwner, i, length, offset] 
+        calldataload        // [owner, currentOwner, i, length, offset]   
+        /////////         
+
+
+        [OWNERS_SLOT]       // [slot, owner, currentOwner, i, length, offset]
+        dup2                // [owner, slot, owner, currentOwner, i, length, offset]
+        swap3               // [currentOwner, slot, owner, owner, i, length, offset]
+        swap2               // [owner, slot, currentOwner, owner, i, length, offset]
+        swap1               // [slot, owner, currentOwner, owner, i, length, offset] 
+
+                            
+        SET()               // [owner, i, length, offset]
+
+        // increase i.
+        swap1               // [i, owner, length, offset]
+        0x01 add            // [i++, owner, length, offset]
+
+        
+        ///////// If i is less than length, continue iterating.
+        dup1                // [i, i, owner, length, offset]
+        dup4                // [length, i, i, owner, length, offset]
+        swap1               // [i, length, i, owner, length, offset]
+        lt                  // [bool, i, owner, length, offset]
+        preLoopJump jumpi   // [i, owner, length, offset]
+        /////////       
+
+        // Else, end the loop and set owners[currentOwner] = sentinel_owners.
+        pop [OWNERS_SLOT]     // [slot, owner, length, offset]
+        [SENTINEL_OWNERS]     // [sentinel_owners, slot, owner, length, offset]      
+        swap1                 // [slot, sentinel_owners, owner, length, offset]
+        SET()                 // [length, offset]
+
+
+    dup1                      // [length, length, offset]           
+    // Set the owner count (length of the array). 
+    [OWNER_COUNT_SLOT]        // [slot, length, length, offset]
+    sstore                    // [length, offset]
+
+    //  require(_threshold <= _owners.length)
+    0x24 calldataload         // [_threshold, length, offset]
+    swap1 lt revertCall jumpi // [offset]
+    pop                       // []
+
+    // Set the threshold.      
+    0x24 calldataload         // [threshold]
+    [THRESHOLD_SLOT] sstore   // []
+     
+    continue jump
+
+
+        preLoopJump:          // [i, owner, length, offset]
+            swap1             // [owner, i, length, offset] 
+            loopJump jump
+    
+    revertCall:
+        0x00 0x00 mstore 
+        0x00 0x00 revert
+    
+
+    continue:
+        // .... 
+        
+}
+
+/// Adds a new owner and optionally changes the threshold. 
+#define macro ADD_OWNER_WITH_THRESHOLD() = takes(0) returns (0) {
+    AUTHORIZED()
+    0x04 calldataload           // [owner]
+    dup1                        // [owner, owner]
+
+    /////// require(owner != address(0) && owner != sentinel_owners && owner != address(this))
+    0x00 eq revertCall jumpi    // [owner]
+    dup1                        // [owner, owner]
+    [SENTINEL_OWNERS] eq 
+    revertCall jumpi            // [owner]
+    dup1                        // [owner, owner]
+    address eq revertCall jumpi // [owner]
+    ///////
+
+    /////// require(owners[owner] == address(0)).
+    dup1                        // [owner, owner]
+    [OWNERS_SLOT]               // [owners_slot, owner, owner]
+    GET()                       // [res, owner]
+    0x00 lt revertCall jumpi    // [owner]
+    ///////
+
+    [SENTINEL_OWNERS]           // [sentinel_owners, owner]
+    [OWNERS_SLOT]               // [owners_slot, sentinel_owners, owner]
+    GET()                       // [val, owner]
+
+    [OWNERS_SLOT]               // [owners_slot, val, owner]
+
+    // owners[owner] = owners[sentinel_owners];
+    SET()                       // []
+
+    [SENTINEL_OWNERS]           // [sentinel_owners]
+    0x04 calldataload           // [owner, sentinel_owners]
+    [OWNERS_SLOT]               // [owners_slot, owner, sentinel_owners]
+
+    // owners[sentinel_owners] = owner;
+    SET()                       // []
+
+    // We increase the owner count
+    [OWNER_COUNT_SLOT]          // [OWNER_COUNT_SLOT]
+    sload                       // [ownerCount]
+    0x01 add                    // [ownerCount++]
+
+    [OWNER_COUNT_SLOT]          // [OWNER_COUNT_SLOT, ownerCount]
+    sstore                      // []
+
+    // @todo emit event. 
+
+    // We load the threshold. 
+    0x24 calldataload           // [threshold]
+
+    0x01 0x20 mstore                  
+    0x20 0x20 return
+
+    revertCall:
+        0x00 0x00 mstore
+        0x00 0x00 revert
+}
+
+/// Removes an owner and optionally changes the threshold. 
+#define macro REMOVE_OWNER() = takes(0) returns (0) {
+    AUTHORIZED()
+    0x04 calldataload           // [prevOwner]
+    0x24 calldataload           // [owner, prevOwner]
+    [OWNERS_SLOT]               // [owners_slot, owner, prevOwner] 
+    GET()                       // [val, prevOwner]
+    [OWNERS_SLOT]               // [owners_slot, val, prevOwner]
+
+    // owners[prevOwner] = owners[owner];
+    SET()                       // []
+
+    0x24 calldataload           // [owner]
+    0x00                        // [0x00, owner]
+    [OWNERS_SLOT]               // [owners_slot, 0x00, owner]
+
+    // owners[owner] = address(0)
+    SET()                       // []
+
+    // We decrease the owner count.
+    [OWNER_COUNT_SLOT]          // [OWNER_COUNT_SLOT]
+    sload                       // [ownerCount]
+    0x01 swap1 sub              // [ownerCount--]
+
+    [OWNER_COUNT_SLOT]          // [OWNER_COUNT_SLOT, ownerCount]
+    sstore                      // []
+
+    0x01 0x20 mstore            // []
+    0x20 0x20 return            // []
+}
+
+/// Changes the threshold. 
+#define macro CHANGE_THRESHOLD() = takes(0) returns (0) {
+    AUTHORIZED()
+
+    0x04 calldataload       // [newThreshold]
+
+    /////// require(_threshold <= ownerCount
+    dup1                    // [newThreshold, newThreshold]
+    [OWNER_COUNT_SLOT]      // [OWNER_COUNT_SLOT, newThreshold, newThreshold]
+    sload                   // [ownerCount, newThreshold, newThreshold]          
+    lt revertCall jumpi     // [newThreshold]
+    ///////
+
+    /////// require(_threshold >= 1)
+    dup1                    // [newThreshold, newThreshold]
+    0x1 gt revertCall jumpi // [newThreshold]
+    ///////
+
+    [THRESHOLD_SLOT]        // [THRESHOLD_SLOT, newThreshold]
+    sstore                  // []
+    
+    0x01 0x20 mstore        // []
+    0x20 0x20 return        // []
+
+
+    revertCall:
+        0x00 0x00 mstore
+        0x00 0x00 revert
+
+}
+
+/// Returns the current threshold.
+#define macro GET_THRESHOLD() = takes(0) returns (0) {
+    [THRESHOLD_SLOT]        // [threshold_slot]
+    sload                   // [threshold]
+    0x00 mstore             // []
+    0x20 0x00 return
+}
+
+/// Returns an array with all the current owners.
+#define macro GET_OWNERS() =  takes(0) returns (0) {
+    // In order to return address[] memory, we need to 
+    // return the following bytes in memory: 
+    // Pos x -> first 32 bytes: The mem location to start reading. 
+    // Second 32 bytes (at pos x): The length of the array. 
+    // Followed by the addresses, each 32 bytes padded.
+
+    // Memory location.
+    0x20 0x80 mstore            
+
+    // Memory pointer.
+    0x80                       // [pointer]
+
+    // We get the length (start at 0).
+    0x01                       // [length, pointer]
+
+    [SENTINEL_OWNERS]          // [sentinel_owners, length, pointer] 
+    [OWNERS_SLOT]              // [owners_slot, sentinel_owners, length, pointer] 
+
+    GET()                      // [currentOwner, length, pointer] 
+
+    loopJump jump
+    loopJump:       // Each loop should start with the following
+                    // stack items: [currentOwner, length, pointer]
+         
+         /// We store the current owner in memory at pos pointer + 0x20
+            dup3         // [pointer, currentOwner, length, pointer]
+            0x20         // [0x20, pointer, currentOwner, length, pointer]
+            add          // [newPointer, currentOwner, length, pointer]
+            swap3        // [pointer, currentOwner, length, newPointer]
+            pop          // [currentOwner, length, newPointer]
+            dup3         // [newPointer, currentOwner, length, newPointer]
+            dup2         // [currentOwner, newPointer, currentOwner, length, newPointer]
+            swap1        // [newPointer, currentOwner, currentOwner, length, newPointer]
+            0x20 add
+            mstore       // 
+         /// 
+
+            // Get the new current owner.
+            [OWNERS_SLOT]                // [owners_slot, currentOwner, length, newPointer]
+            GET()                        // [newCurrentOwner, length, newPointer]
+
+            // We loop until the currentOwner != sentinel_owners 
+            dup1                         // [newCurrentOwner, newCurrentOwner, length, newPointer]
+            [SENTINEL_OWNERS]            // [sentinel_owners, newCurrentOwner, newCurrentOwner, length, newPointer]
+            eq                           // [bool, newCurrentOwner, length, newPointer]
+            iszero preLoopJump jumpi     // [newCurrentOwner, length, newPointer]
+            
+            // We store the length of the array at memory pos 0xA0 and return.
+            swap1 dup1                   // [length, length, newCurrentOwner, newPointer]
+            0xA0 mstore                  // [length, newCurrentOwner, newPointer]
+            
+            // Now we get the return statement length. 
+            0x20 mul                    // [mul(length), newCurrentOwner, newPointer]
+            0x40 add                    // [add(length), newCurrentOwner, newPointer]
+            0x80 return                 // []
+
+
+            preLoopJump:    // [newCurrentOwner, length, newPointer]
+                swap1       // [length, newCurrentOwner, newPointer]
+                0x01 add    // [length++, newCurrentOwner, newPointer]
+                swap1       // [newCurrentOwner, length, newPointer]
+                loopJump jump
+
+}
+
+/// Returns the amount of current owners.
+#define macro OWNER_COUNT() = takes(0) returns (0) {
+    [OWNER_COUNT_SLOT]      // [owner_count_slot]
+    sload                   // [ownerCount]
+    0x00 mstore             // []
+    0x20 0x00 return        // []
+}
+
+/// Returns true if the provided address is a current safe owner.
+#define macro IS_OWNER() = takes(0) returns (0) {
+    0x04 calldataload       // [owner]
+    dup1                    // [owner, owner]
+    [SENTINEL_OWNERS]       // [sentinel_owners, owner, owner]
+    eq                      // [bool, owner]
+    returnFalse jumpi       // [owner]
+
+    [OWNERS_SLOT]           // [owners_slot, owner]
+
+    GET()                   // [res]
+    0x00                    // [0x00, res]
+    eq                      // [bool]
+    returnFalse jumpi       // []
+
+    // Return true. 
+    0x01 0x20 mstore 
+    0x20 0x20 return 
+
+    returnFalse:
+       0x00 0x20 mstore 
+       0x20 0x20 return
+        
+}
