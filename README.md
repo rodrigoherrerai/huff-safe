@@ -37,3 +37,14 @@ There are 3 type of test suites:
 
 ## NOTE
 This code is only for educational purposes
+
+
+## Todo 
+The code is around 85-90% complete, there are a few things missing
+- [] Guard Manager
+- [] Emit events in some functions
+- [] Accept contract signatures (EIP1271)
+- [] Handle payment in execTransaction
+- [] Fallback manager && TokenCallbackHandler
+
+
