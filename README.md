@@ -32,7 +32,7 @@ There are 3 type of test suites:
 
 1. Unit test: testing each function
 2. Differential tests: tests safe.huff against safe.sol 
-3. Fuzzing: Tries to break certain assumptions by providing various imputs
+3. Fuzzing: Tries to break certain assumptions by providing various inputs
 
 
 ## NOTE
